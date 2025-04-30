@@ -1,0 +1,193 @@
+import pygame
+import numpy as np
+import random
+import matplotlib.pyplot as plt
+import scipy as sc
+from scipy.integrate import odeint, solve_ivp
+
+# initialize pygame
+pygame.init()
+
+#constants
+WIDTH, HEIGHT = 800, 600 # screen size
+WHITE = (255,255,255)
+BLACK = (0,0,0)
+RED = (255,0,0)
+BLUE = (0,0,255)
+SPEED = 30 #game speed
+time_step = 0.1
+
+#font for displaying text
+FONT = pygame.font.Font(None,24)
+
+#robot parameters
+m, λ, J = 1, 50, 1/12 * 1 * 50**2 
+global counter1
+counter1 = 0
+
+
+
+def ODEeq(t, state, dα):
+    x, y, θ, α, p = state
+    Iα = 4 * J + m * λ**2 + (m * λ**2 - 4 * J) * np.cos(α)
+    dp = (m * λ**2 * p * dα) / (Iα * np.tan(α / 2))
+    dx = (λ / 4) * np.cos(θ) * np.tan(α / 2) * ((4 * p * (1 + np.cos(α)) / Iα) + dα)
+    dy = (λ / 4) * np.sin(θ) * np.tan(α / 2) * ((4 * p * (1 + np.cos(α)) / Iα) + dα)
+    dθ = (2 * p * (1 - np.cos(α)) / Iα) - (dα / 2)
+
+    return [dx, dy, dθ, dα, dp]
+
+
+def compute_next_state(state, dα, time_val):
+    x, y, θ, α, p = state
+    #dα = dα
+    t1 = time_val[-1]
+    t2 = t1  + time_step
+    
+    sol1 = solve_ivp(ODEeq, [t1,t2], np.array(state), args=(dα,), method = 'LSODA')
+    x_new, y_new, θ_new, α_new, p_new = sol1.y[:, -1]
+
+    Iα = 4 * J + m * λ**2 + (m * λ**2 - 4 * J) * np.cos(α)
+    dp = (m * λ**2 * p * dα) / (Iα * np.tan(α / 2))
+    dx = (λ / 4) * np.cos(θ) * np.tan(α / 2) * ((4 * p * (1 + np.cos(α)) / Iα) + dα)
+    dy = (λ / 4) * np.sin(θ) * np.tan(α / 2) * ((4 * p * (1 + np.cos(α)) / Iα) + dα)
+    dθ = (2 * p * (1 - np.cos(α)) / Iα) - (dα / 2)
+    dx2c = dx - λ/2 * np.sin(θ) * dθ - λ/2 * np.sin(θ + α)*(dθ+dα)
+    dy2c = dy + λ/2 * np.cos(θ) * dθ + λ/2 * np.cos(θ + α)*(dθ+dα)
+
+    
+    return (x_new, y_new, θ_new, α_new, p_new), (dp, dx, dy, dx2c, dy2c)
+
+
+
+class SnakeRobotGame:
+    def __init__(self):
+        self.display = pygame.display.set_mode((WIDTH,HEIGHT))
+        pygame.display.set_caption("Two-Link Snake Robot")
+        self.clock = pygame.time.Clock()
+
+        self.reset()
+        self.x_val, self.y_val, self.θ_val, self.α_val, self.p_val, self.dp_val, self.dx_val, self.dy_val, self.dx2c_val, self.dy2c_val, = [0],[0],[1],[1.5],[2],[],[],[],[],[]
+        self.constraint1 = []
+        self.constraint2 = []
+        self.time_span = np.arange(0,20,0.1)
+        self.time_val = [0]
+
+        #plt.ion()
+        #self.fig, self.axs = plt.subplots(3,1)
+
+    def reset(self):
+        self.state = [WIDTH/2, HEIGHT/2, 1, 0.5, 100]  #(x, y, θ, α, p)
+        x, y, θ, α, p = self.state
+
+        while True:
+            target_x = random.randint(10, WIDTH-10)
+            target_y = random.randint(10, HEIGHT-10)
+            if np.linalg.norm(np.array([target_x, target_y])-np.array([x, y])) > 5:
+                break
+
+        self.target = (target_x, target_y)
+        self.dα = np.cos(0)/5
+
+    def play_step(self):
+        global counter1
+
+
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                pygame.quit()
+                quit()
+            elif event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_UP:
+                    self.dα += 0.1
+                elif event.key == pygame.K_DOWN:
+                    self.dα -= 0.1
+
+
+        #self.dα = np.cos(self.time_val[-1])
+
+        self.state_new, extra_vars = compute_next_state(self.state, self.dα, self.time_val)
+        x, y, θ, α, p = self.state
+        dp, dx, dy, dx2c, dy2c = extra_vars
+        self.dx_val.append(dx)
+        self.dy_val.append(dy)
+        self.dx2c_val.append(dx2c)
+        self.dy2c_val.append(dy2c)
+
+        self.constraint1.append(self.dx_val[-1]*np.sin(self.θ_val[-1])-self.dy_val[-1]*np.cos(self.θ_val[-1]))
+        self.constraint2.append(dx2c*np.sin(θ+α)-dy2c*np.cos(θ+α))
+
+        if np.linalg.norm(np.array([x,y])-np.array(self.target)) < 1:
+            while True:
+                target_x = random.randint(10, WIDTH-10)
+                target_y = random.randint(10, HEIGHT-10)
+                if np.linalg.norm(np.array([target_x, target_y])-np.array([x, y])) > 5:
+                    break
+
+            self.target = (target_x, target_y)
+
+        #update ui
+        self._update_ui()
+        #self._update_plots()
+        self.clock.tick(SPEED)
+        
+        counter1 += 1
+        self.time_val.append(self.time_span[counter1])
+        self.state = list(self.state_new)
+        x, y, θ, α, p = self.state
+        self.x_val.append(x)
+        self.y_val.append(y)
+        self.θ_val.append(θ) 
+        self.α_val.append(α) 
+        self.p_val.append(p) 
+
+    
+        
+
+    def _update_ui(self):
+        self.display.fill(BLACK)
+
+        pygame.draw.circle(self.display, RED, self.target, 5)
+
+
+        x, y, θ, α, p = self.state
+        x0 = x - λ/2 * np.cos(θ)
+        y0 = y - λ/2 * np.sin(θ)
+        x1 = x + λ/2 * np.cos(θ)
+        y1 = y + λ/2 * np.sin(θ)
+        x2 = x1 + λ * np.cos(θ + α)
+        y2 = y1 + λ * np.sin(θ + α)
+
+        pygame.draw.line(self.display, BLUE, (x0,y0), (x1,y1), 5)
+        pygame.draw.line(self.display, BLUE, (x1,y1), (x2,y2), 5)
+
+        text_surface = FONT.render(f"dα: {self.dα: .2f}", True, WHITE)
+        self.display.blit(text_surface,(10,10))
+
+        pygame.display.flip()
+
+    def _update_plots(self):
+        print(f"Time = {self.time_val[-1]}, θ: {self.θ_val[-1]}, dx: {self.dx_val[-1]}, dy: {self.dy_val[-1]}")
+        self.axs[0].cla()
+        self.axs[0].plot(self.time_val, self.p_val, label='p[t]')
+        self.axs[0].legend()
+        
+        self.axs[1].cla()
+        self.axs[1].plot(self.time_val, self.constraint1, label='dx*sin(θ) - dy*cos(θ)')
+        self.axs[1].legend()
+
+        self.axs[2].cla()
+        self.axs[2].plot(self.time_val, self.constraint2, label='dx2*sin(θ+α) - dy2*cos(θ+α)')
+        self.axs[2].legend()
+
+        self.axs[2].cla()
+        self.axs[2].plot(self.x_val, self.y_val, label='x-y')
+        self.axs[2].legend()
+        
+        plt.pause(0.01)
+
+
+if __name__=="__main__":
+    game = SnakeRobotGame()
+    while True:
+        game.play_step()
